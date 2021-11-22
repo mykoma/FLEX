@@ -11,14 +11,10 @@
 //  See the LICENSE file distributed with this work for the terms under
 //  which Square, Inc. licenses this file to you.
 //
-//  Heavily modified and added to by Tanner Bennett and various other contributors.
-//  git blame details these modifications.
-//
 
 #import "FLEXNetworkObserver.h"
 #import "FLEXNetworkRecorder.h"
 #import "FLEXUtility.h"
-#import "NSUserDefaults+FLEX.h"
 #import "NSObject+FLEX_Reflection.h"
 #import "FLEXMethod.h"
 
@@ -28,6 +24,7 @@
 #include <dlfcn.h>
 
 NSString *const kFLEXNetworkObserverEnabledStateChangedNotification = @"kFLEXNetworkObserverEnabledStateChangedNotification";
+static NSString *const kFLEXNetworkObserverEnabledDefaultsKey = @"com.flex.FLEXNetworkObserver.enableOnLaunch";
 
 typedef void (^NSURLSessionAsyncCompletion)(id fileURLOrData, NSURLResponse *response, NSError *error);
 typedef NSURLSessionTask * (^NSURLSessionNewTaskMethod)(NSURLSession *, id, NSURLSessionAsyncCompletion);
@@ -96,7 +93,7 @@ didBecomeDownloadTask:(NSURLSessionDownloadTask *)downloadTask delegate:(id<NSUR
 + (void)setEnabled:(BOOL)enabled {
     BOOL previouslyEnabled = [self isEnabled];
     
-    NSUserDefaults.standardUserDefaults.flex_networkObserverEnabled = enabled;
+    [NSUserDefaults.standardUserDefaults setBool:enabled forKey:kFLEXNetworkObserverEnabledDefaultsKey];
     
     if (enabled) {
         // Inject if needed. This injection is protected with a dispatch_once, so we're ok calling it multiple times.
@@ -110,7 +107,7 @@ didBecomeDownloadTask:(NSURLSessionDownloadTask *)downloadTask delegate:(id<NSUR
 }
 
 + (BOOL)isEnabled {
-    return NSUserDefaults.standardUserDefaults.flex_networkObserverEnabled;
+    return [[NSUserDefaults.standardUserDefaults objectForKey:kFLEXNetworkObserverEnabledDefaultsKey] boolValue];
 }
 
 + (void)load {
@@ -140,11 +137,9 @@ didBecomeDownloadTask:(NSURLSessionDownloadTask *)downloadTask delegate:(id<NSUR
 #pragma mark Delegate Injection Convenience Methods
 
 /// All swizzled delegate methods should make use of this guard.
-/// This will prevent duplicated sniffing when the original implementation calls up to a superclass
-/// implementation which we've also swizzled. The superclass implementation (and implementations in
-/// classes above that) will be executed without interference if called from the original implementation.
-+ (void)sniffWithoutDuplicationForObject:(NSObject *)object selector:(SEL)selector
-                           sniffingBlock:(void (^)(void))sniffingBlock originalImplementationBlock:(void (^)(void))originalImplementationBlock {
+/// This will prevent duplicated sniffing when the original implementation calls up to a superclass implementation which we've also swizzled.
+/// The superclass implementation (and implementations in classes above that) will be executed without interference if called from the original implementation.
++ (void)sniffWithoutDuplicationForObject:(NSObject *)object selector:(SEL)selector sniffingBlock:(void (^)(void))sniffingBlock originalImplementationBlock:(void (^)(void))originalImplementationBlock {
     // If we don't have an object to detect nested calls on, just run the original implementation and bail.
     // This case can happen if someone besides the URL loading system calls the delegate methods directly.
     // See https://github.com/Flipboard/FLEX/issues/61 for an example.
@@ -1464,6 +1459,10 @@ didReceiveResponse:(NSURLResponse *)response
     [self performBlock:^{
         NSString *requestID = [[self class] requestIDForConnectionOrTask:connection];
         FLEXInternalRequestState *requestState = [self requestStateForRequestID:requestID];
+        
+        if (!requestState.dataAccumulator) {
+            requestState.dataAccumulator = [NSMutableData new];
+        }
         [requestState.dataAccumulator appendData:data];
         
         [FLEXNetworkRecorder.defaultRecorder
@@ -1586,6 +1585,9 @@ didBecomeDownloadTask:(NSURLSessionDownloadTask *)downloadTask
         NSString *requestID = [[self class] requestIDForConnectionOrTask:dataTask];
         FLEXInternalRequestState *requestState = [self requestStateForRequestID:requestID];
 
+        if (!requestState.dataAccumulator) {
+            requestState.dataAccumulator = [NSMutableData new];
+        }
         [requestState.dataAccumulator appendData:data];
 
         [FLEXNetworkRecorder.defaultRecorder
@@ -1659,6 +1661,10 @@ didFinishDownloadingToURL:(NSURL *)location data:(NSData *)data
     [self performBlock:^{
         NSString *requestID = [[self class] requestIDForConnectionOrTask:downloadTask];
         FLEXInternalRequestState *requestState = [self requestStateForRequestID:requestID];
+        
+        if (!requestState.dataAccumulator) {
+            requestState.dataAccumulator = [NSMutableData new];
+        }
         [requestState.dataAccumulator appendData:data];
     }];
 }
